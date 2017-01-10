@@ -104,6 +104,14 @@ void createRenderPass();
 
 void createFramebuffers();
 
+void createCommandPool();
+
+void createCommandBuffers();
+
+void createSemaphores();
+
+void drawFrame();
+
 VkSurfaceFormatKHR chooseSwapSurfaceFormat(const std::vector<VkSurfaceFormatKHR>& availableFormats);
 
 VkPresentModeKHR chooseSwapPresentMode(const std::vector<VkPresentModeKHR> availablePresentModes);
@@ -113,6 +121,7 @@ VkExtent2D chooseSwapExtent(const VkSurfaceCapabilitiesKHR& capabilities);
 QueueFamilyIndices findQueueFamilies(VkPhysicalDevice device);
 
 SwapChainSupportDetails querySwapChainSupport(VkPhysicalDevice device);
+
 
 VDeleter<VkInstance> instance {vkDestroyInstance};
 VkPhysicalDevice physicalDevice = VK_NULL_HANDLE;
@@ -131,6 +140,12 @@ VDeleter<VkShaderModule> fragShaderModule{device, vkDestroyShaderModule};
 VDeleter<VkPipelineLayout> pipelineLayout{device, vkDestroyPipelineLayout};
 VDeleter<VkRenderPass> renderPass{device, vkDestroyRenderPass};
 VDeleter<VkPipeline> graphicsPipeline{device, vkDestroyPipeline};
+
+VDeleter<VkCommandPool> commandPool{device, vkDestroyCommandPool};
+std::vector<VkCommandBuffer> commandBuffers;
+
+VDeleter<VkSemaphore> imageAvailableSemaphore{device, vkDestroySemaphore};
+VDeleter<VkSemaphore> renderFinishedSemaphore{device, vkDestroySemaphore};
 
 VkQueue graphicsQueue;
 VkQueue presentQueue;
@@ -162,8 +177,12 @@ void android_main(struct android_app* app) {
         if (ALooper_pollAll(initialized_? 1: 0, nullptr, &events, (void**)&source) >= 0) {
             if (source != NULL) source->process(app, source);
         }
+        if (initialized_) drawFrame();
     } while (app->destroyRequested == 0);
 
+    if (initialized_) {
+        vkDeviceWaitIdle(device);
+    }
 }
 
 bool initialize(android_app* app) {
@@ -190,76 +209,17 @@ bool initialize(android_app* app) {
     createGraphicsPipeline(app);
 
     createFramebuffers();
-/*
-    // Find one GPU to use:
-    // On Android, every GPU device is equal -- supporting graphics/compute/present
-    // for this sample, we use the very first GPU device found on the system
-    uint32_t  gpuCount = 0;
-    CALL_VK(vkEnumeratePhysicalDevices(instance, &gpuCount, nullptr));
-    VkPhysicalDevice tmpGpus[gpuCount];
-    CALL_VK(vkEnumeratePhysicalDevices(instance, &gpuCount, tmpGpus));
-    tutorialGpu = tmpGpus[0];     // Pick up the first GPU Device
 
-    // check for vulkan info on this GPU device
-    VkPhysicalDeviceProperties  gpuProperties;
-    vkGetPhysicalDeviceProperties(tutorialGpu, &gpuProperties);
-    LOGI("Vulkan Physical Device Name: %s", gpuProperties.deviceName);
-    LOGI("Vulkan Physical Device Info: apiVersion: %x \n\t driverVersion: %x",
-         gpuProperties.apiVersion, gpuProperties.driverVersion);
-    LOGI("API Version Supported: %d.%d.%d",
-         VK_VERSION_MAJOR(gpuProperties.apiVersion),
-         VK_VERSION_MINOR(gpuProperties.apiVersion),
-         VK_VERSION_PATCH(gpuProperties.apiVersion));
+    createCommandPool();
 
+    createCommandBuffers();
 
-    LOGI("Vulkan Surface Capabilities:\n");
-    LOGI("\timage count: %u - %u\n", surfaceCapabilities.minImageCount,
-         surfaceCapabilities.maxImageCount);
-    LOGI("\tarray layers: %u\n", surfaceCapabilities.maxImageArrayLayers);
-    LOGI("\timage size (now): %dx%d\n",
-         surfaceCapabilities.currentExtent.width,
-         surfaceCapabilities.currentExtent.height);
-    LOGI("\timage size (extent): %dx%d - %dx%d\n",
-         surfaceCapabilities.minImageExtent.width,
-         surfaceCapabilities.minImageExtent.height,
-         surfaceCapabilities.maxImageExtent.width,
-         surfaceCapabilities.maxImageExtent.height);
-    LOGI("\tusage: %x\n", surfaceCapabilities.supportedUsageFlags);
-    LOGI("\tcurrent transform: %u\n", surfaceCapabilities.currentTransform);
-    LOGI("\tallowed transforms: %x\n", surfaceCapabilities.supportedTransforms);
-    LOGI("\tcomposite alpha flags: %u\n", surfaceCapabilities.currentTransform);
+    createSemaphores();
 
-    // Create a logical device from GPU we picked
-    float priorities[] = { 1.0f, };
-    VkDeviceQueueCreateInfo queueCreateInfo {
-            .sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO,
-            .pNext = nullptr,
-            .flags = 0,
-            .queueCount = 1,
-            .queueFamilyIndex = 0,
-            .pQueuePriorities = priorities,
-    };
-
-    std::vector<const char *>  deviceExt;
-    deviceExt.push_back(VK_KHR_SWAPCHAIN_EXTENSION_NAME);
-
-    VkDeviceCreateInfo deviceCreateInfo {
-            .sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO,
-            .pNext = nullptr,
-            .queueCreateInfoCount = 1,
-            .pQueueCreateInfos = &queueCreateInfo,
-            .enabledLayerCount = 0,
-            .ppEnabledLayerNames = nullptr,
-            .enabledExtensionCount = static_cast<uint32_t>(deviceExt.size()),
-            .ppEnabledExtensionNames = deviceExt.data(),
-            .pEnabledFeatures = nullptr,
-    };
-
-    CALL_VK(vkCreateDevice(tutorialGpu, &deviceCreateInfo, nullptr,
-                           &tutorialDevice));*/
     initialized_ = true;
     return 0;
 }
+
 
 void createInstance() {
 
@@ -447,7 +407,7 @@ void createSwapChain() {
     // To specify that you do not want any transformation, simply specify the current transformation.
     createInfo.preTransform = swapChainSupport.capabilities.currentTransform;
 
-    createInfo.compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
+    createInfo.compositeAlpha = VK_COMPOSITE_ALPHA_INHERIT_BIT_KHR;
 
     createInfo.presentMode = presentMode;
     createInfo.clipped = VK_TRUE;
@@ -523,6 +483,19 @@ void createRenderPass() {
     renderPassInfo.subpassCount = 1;
     renderPassInfo.pSubpasses = &subpass;
 
+    VkSubpassDependency dependency = {};
+    dependency.srcSubpass = VK_SUBPASS_EXTERNAL;
+    dependency.dstSubpass = 0;
+
+    dependency.srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+    dependency.srcAccessMask = 0;
+
+    dependency.dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+    dependency.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+
+    renderPassInfo.dependencyCount = 1;
+    renderPassInfo.pDependencies = &dependency;
+
     if (vkCreateRenderPass(device, &renderPassInfo, nullptr, renderPass.replace()) != VK_SUCCESS) {
         LOGE("failed to create render pass!");
     }
@@ -535,7 +508,7 @@ void createGraphicsPipeline(android_app *app) {
         LOGE("failed to create vertex shader module!");
     }
 
-    if (createShaderModule(app, device, "shaders/triangle_frag.spv", vertShaderModule.replace()) != VK_SUCCESS) {
+    if (createShaderModule(app, device, "shaders/triangle_frag.spv", fragShaderModule.replace()) != VK_SUCCESS) {
         LOGE("failed to create fragment shader module!");
     }
 
@@ -548,8 +521,8 @@ void createGraphicsPipeline(android_app *app) {
 
     VkPipelineShaderStageCreateInfo fragShaderStageInfo = {};
     fragShaderStageInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-    fragShaderStageInfo.stage = VK_SHADER_STAGE_VERTEX_BIT;
-    fragShaderStageInfo.module = vertShaderModule;
+    fragShaderStageInfo.stage = VK_SHADER_STAGE_FRAGMENT_BIT;
+    fragShaderStageInfo.module = fragShaderModule;
     fragShaderStageInfo.pName = "main";
     fragShaderStageInfo.pSpecializationInfo = nullptr;
 
@@ -594,7 +567,7 @@ void createGraphicsPipeline(android_app *app) {
     rasterizer.rasterizerDiscardEnable = VK_FALSE;
 
     rasterizer.polygonMode = VK_POLYGON_MODE_FILL;
-    //rasterizer.lineWidth = 1.0f;
+    rasterizer.lineWidth = 1.0f;
 
     rasterizer.cullMode = VK_CULL_MODE_BACK_BIT;
     rasterizer.frontFace = VK_FRONT_FACE_CLOCKWISE;
@@ -699,6 +672,125 @@ void createFramebuffers() {
         }
     }
 }
+
+void createCommandPool() {
+    QueueFamilyIndices queueFamilyIndices = findQueueFamilies(physicalDevice);
+
+    VkCommandPoolCreateInfo poolInfo = {};
+    poolInfo.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
+    poolInfo.queueFamilyIndex = queueFamilyIndices.graphicsFamily;
+    poolInfo.flags = 0; // Optional
+
+    if (vkCreateCommandPool(device, &poolInfo, nullptr, commandPool.replace()) != VK_SUCCESS) {
+        LOGE("failed to create command pool!");
+    }
+}
+
+void createCommandBuffers() {
+    commandBuffers.resize(swapChainFramebuffers.size());
+
+    VkCommandBufferAllocateInfo allocInfo = {};
+    allocInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+    allocInfo.commandPool = commandPool;
+    allocInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+    allocInfo.commandBufferCount = (uint32_t) commandBuffers.size();
+
+    if (vkAllocateCommandBuffers(device, &allocInfo, commandBuffers.data()) != VK_SUCCESS) {
+        LOGE("failed to allocate command buffers!");
+    }
+
+    for (size_t i = 0; i < commandBuffers.size(); i++) {
+        VkCommandBufferBeginInfo beginInfo = {};
+        beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+        beginInfo.flags = VK_COMMAND_BUFFER_USAGE_SIMULTANEOUS_USE_BIT;
+        beginInfo.pInheritanceInfo = nullptr; // Optional
+
+        vkBeginCommandBuffer(commandBuffers[i], &beginInfo);
+
+            VkRenderPassBeginInfo renderPassInfo = {};
+            renderPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
+            renderPassInfo.renderPass = renderPass;
+            renderPassInfo.framebuffer = swapChainFramebuffers[i];
+
+            renderPassInfo.renderArea.offset = {0, 0};
+            renderPassInfo.renderArea.extent = swapChainExtent;
+
+            VkClearValue clearColor = {0.2f, 0.8f, 0.8f, 1.0f};
+            renderPassInfo.clearValueCount = 1;
+            renderPassInfo.pClearValues = &clearColor;
+
+            vkCmdBeginRenderPass(commandBuffers[i], &renderPassInfo, VK_SUBPASS_CONTENTS_INLINE);
+
+                vkCmdBindPipeline(commandBuffers[i], VK_PIPELINE_BIND_POINT_GRAPHICS, graphicsPipeline);
+
+                vkCmdDraw(commandBuffers[i], 3, 1, 0, 0);
+
+            vkCmdEndRenderPass(commandBuffers[i]);
+
+        if (vkEndCommandBuffer(commandBuffers[i]) != VK_SUCCESS) {
+            LOGE("failed to record command buffer!");
+        }
+
+    }
+
+
+}
+
+void createSemaphores() {
+    VkSemaphoreCreateInfo semaphoreInfo = {};
+    semaphoreInfo.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
+
+    if (vkCreateSemaphore(device, &semaphoreInfo, nullptr, imageAvailableSemaphore.replace()) != VK_SUCCESS ||
+        vkCreateSemaphore(device, &semaphoreInfo, nullptr, renderFinishedSemaphore.replace()) != VK_SUCCESS) {
+
+        LOGE("failed to create semaphores!");
+    }
+
+}
+
+
+void drawFrame() {
+    uint32_t imageIndex;
+    vkAcquireNextImageKHR(device, swapChain, std::numeric_limits<uint64_t>::max(), imageAvailableSemaphore, VK_NULL_HANDLE, &imageIndex);
+
+    VkSubmitInfo submitInfo = {};
+    submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+
+    VkSemaphore waitSemaphores[] = {imageAvailableSemaphore};
+    VkPipelineStageFlags waitStages[] = {VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT};
+    submitInfo.waitSemaphoreCount = 1;
+    submitInfo.pWaitSemaphores = waitSemaphores;
+    submitInfo.pWaitDstStageMask = waitStages;
+
+    submitInfo.commandBufferCount = 1;
+    submitInfo.pCommandBuffers = &commandBuffers[imageIndex];
+
+    VkSemaphore signalSemaphores[] = {renderFinishedSemaphore};
+    submitInfo.signalSemaphoreCount = 1;
+    submitInfo.pSignalSemaphores = signalSemaphores;
+
+    if (vkQueueSubmit(graphicsQueue, 1, &submitInfo, VK_NULL_HANDLE) != VK_SUCCESS) {
+        LOGE("failed to submit draw command buffer!");
+    }
+
+    VkPresentInfoKHR presentInfo = {};
+    presentInfo.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
+
+    presentInfo.waitSemaphoreCount = 1;
+    presentInfo.pWaitSemaphores = signalSemaphores;
+
+    VkSwapchainKHR swapChains[] = {swapChain};
+    presentInfo.swapchainCount = 1;
+    presentInfo.pSwapchains = swapChains;
+    presentInfo.pImageIndices = &imageIndex;
+
+    presentInfo.pResults = nullptr; // Optional
+
+    vkQueuePresentKHR(presentQueue, &presentInfo);
+
+
+}
+
 
 bool isDeviceSuitable(VkPhysicalDevice device) {
     QueueFamilyIndices indices = findQueueFamilies(device);
