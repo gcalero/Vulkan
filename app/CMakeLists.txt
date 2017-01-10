@@ -12,6 +12,7 @@ add_library( app-glue STATIC ${APP_GLUE_DIR}/android_native_app_glue.c)
 add_library(vulkan-template SHARED
             src/main/jni/main.cpp
             src/main/jni/vulkan/vulkan_wrapper.cpp
+            src/main/jni/vulkan/pipeline.cpp
             src/main/jni/vulkan/VDeleter.h
             )
 

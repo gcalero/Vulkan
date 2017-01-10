@@ -1,6 +1,7 @@
 #include <vulkan/vulkan.h>
 #include <functional>
-
+#ifndef __VDELETER_H_
+#define __VDELETER_H_
 template <typename T>
 class VDeleter {
 public:
@@ -58,3 +59,4 @@ private:
         object = VK_NULL_HANDLE;
     }
 };
+#endif
